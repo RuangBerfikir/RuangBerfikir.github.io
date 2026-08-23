@@ -1,4 +1,4 @@
-const API_BASE = 'http://localhost:3000/api';
+const API_BASE = '';
 const GOOGLE_SHEETS_URL = 'https://script.google.com/macros/s/AKfycbyVekMA2rb-kCvGmV9k6bvSbIvQ7_7t5A_bCR5FHCLo58BpZRAHWRppBhCCGGTelh3y0A/exec'; // Isi dengan URL Web App Google Apps Script.
 const ADMIN_USERNAME = 'admin';
 const ADMIN_PASSWORD = 'tjkt2025';
@@ -17,6 +17,37 @@ const defaultLandingContent = {
   button: 'Mulai belajar',
   image: ''
 };
+
+async function loadRemoteConfig() {
+  if (!GOOGLE_SHEETS_URL) return;
+  try {
+    const response = await fetch(`${GOOGLE_SHEETS_URL}?action=config`, { cache: 'no-store' });
+    const json = await response.json();
+    const data = json.data || {};
+    if (data.landingContent) localStorage.setItem(LANDING_CONTENT_KEY, JSON.stringify(data.landingContent));
+    if (Array.isArray(data.materials)) {
+      localStorage.setItem(MATERIALS_KEY, JSON.stringify(data.materials));
+      allMateri = data.materials;
+    }
+    if (Array.isArray(data.quizSchedules)) {
+      localStorage.setItem(QUIZ_SCHEDULES_KEY, JSON.stringify(data.quizSchedules));
+      if (data.quizSchedules[0]) {
+        localStorage.setItem(QUIZ_DATE_KEY, data.quizSchedules[0].date);
+        localStorage.setItem(QUIZ_MAPEL_KEY, data.quizSchedules[0].mapel);
+      }
+    }
+  } catch (error) {}
+}
+
+function saveRemoteConfig(key, value) {
+  if (!GOOGLE_SHEETS_URL) return;
+  fetch(GOOGLE_SHEETS_URL, {
+    method: 'POST',
+    mode: 'no-cors',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ action: 'saveConfig', key, value })
+  }).catch(() => {});
+}
 const fallbackMateri = [
   { mapel: 'KJR', judul: 'Prinsip Keamanan Jaringan', deskripsi: 'Bangun kebiasaan aman untuk melindungi data dan infrastruktur digital.', link: 'materi/prinsip-keamanan-jaringan.pdf', level: 'Menengah' },
   { mapel: 'PKPJ', judul: 'Pemasangan dan Konfigurasi Perangkat Jaringan', deskripsi: 'Pelajari pemasangan kabel, konfigurasi perangkat, dan pengujian koneksi jaringan.', link: 'materi/pemasangan-konfigurasi-perangkat-jaringan.pdf', level: 'Pemula' }
@@ -81,11 +112,13 @@ const mapelNames = { KJR: 'Keamanan', PKPJ: 'Pemasangan perangkat' };
 async function loadMateri() {
   const savedMaterials = await getSavedMaterials();
   if (savedMaterials) allMateri = savedMaterials;
-  try {
-    const res = await fetch(`${API_BASE}/materi`);
-    const json = await res.json();
-    if (!savedMaterials && json.data?.length) allMateri = json.data.filter(m => ['KJR', 'PKPJ'].includes(m.mapel));
-  } catch (err) {}
+  if (API_BASE) {
+    try {
+      const res = await fetch(`${API_BASE}/materi`);
+      const json = await res.json();
+      if (!savedMaterials && json.data?.length) allMateri = json.data.filter(m => ['KJR', 'PKPJ'].includes(m.mapel));
+    } catch (err) {}
+  }
   updateModuleCount();
   if (!document.getElementById('materi-container')) return;
   renderMateri();
@@ -147,6 +180,7 @@ function saveLandingContent() {
     reader.onload = () => {
       content.image = reader.result;
       localStorage.setItem(LANDING_CONTENT_KEY, JSON.stringify(content));
+      saveRemoteConfig('landingContent', content);
       renderLandingContent();
       alert('Konten landing page berhasil disimpan.');
     };
@@ -154,6 +188,7 @@ function saveLandingContent() {
     return;
   }
   localStorage.setItem(LANDING_CONTENT_KEY, JSON.stringify(content));
+  saveRemoteConfig('landingContent', content);
   renderLandingContent();
   alert('Konten landing page berhasil disimpan.');
 }
@@ -161,6 +196,7 @@ function saveLandingContent() {
 function resetLandingContent() {
   if (!confirm('Kembalikan landing page ke konten bawaan?')) return;
   localStorage.removeItem(LANDING_CONTENT_KEY);
+  saveRemoteConfig('landingContent', defaultLandingContent);
   loadLandingEditor();
   renderLandingContent();
   alert('Landing page dikembalikan ke konten bawaan.');
@@ -221,10 +257,12 @@ async function saveMaterials() {
       transaction.onabort = () => reject(transaction.error || new Error('Penyimpanan dibatalkan.'));
     });
     database.close();
+    saveRemoteConfig('materials', allMateri);
     return true;
   } catch (err) {
     try {
       localStorage.setItem(MATERIALS_KEY, JSON.stringify(allMateri));
+      saveRemoteConfig('materials', allMateri);
       return true;
     } catch (storageError) {
       alert('Materi gagal disimpan. File terlalu besar atau penyimpanan browser penuh.');
@@ -432,6 +470,7 @@ function saveQuizSchedules(schedules) {
     localStorage.removeItem(QUIZ_DATE_KEY);
     localStorage.removeItem(QUIZ_MAPEL_KEY);
   }
+  saveRemoteConfig('quizSchedules', validSchedules);
 }
 
 function getQuizMapelName(mapel) {
@@ -635,9 +674,11 @@ async function loadKuis() {
   selectedAnswers = [];
   currentKuisData = fallbackKuis[mapel];
   try {
-    const res = await fetch(`${API_BASE}/kuis/${mapel}`);
-    const json = await res.json();
-    if (json.data?.length >= 20) currentKuisData = json.data.slice(0, 20);
+    if (API_BASE) {
+      const res = await fetch(`${API_BASE}/kuis/${mapel}`);
+      const json = await res.json();
+      if (json.data?.length >= 20) currentKuisData = json.data.slice(0, 20);
+    }
   } catch (err) {}
   document.getElementById('kuis-container').classList.remove('hidden');
   document.getElementById('hasil-kuis').className = 'hidden';
@@ -770,6 +811,11 @@ document.getElementById('landing-image-file')?.addEventListener('change', event 
 addPkpjOptions();
 restrictClassOptions();
 updateMainNavigation();
-updateQuizScheduleInfo();
-renderLandingContent();
-loadMateri();
+async function initializeApp() {
+  await loadRemoteConfig();
+  updateQuizScheduleInfo();
+  renderLandingContent();
+  await loadMateri();
+}
+
+initializeApp();
