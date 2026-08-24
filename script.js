@@ -18,12 +18,15 @@ const defaultLandingContent = {
   image: ''
 };
 let remoteMaterialsLoaded = false;
+let remoteConfigAvailable = false;
 
 async function loadRemoteConfig() {
   if (!GOOGLE_SHEETS_URL) return;
   try {
     const response = await fetch(`${GOOGLE_SHEETS_URL}?action=config`, { cache: 'no-store' });
     const json = await response.json();
+    if (!json.success || !json.data) throw new Error('Deployment Apps Script belum diperbarui.');
+    remoteConfigAvailable = true;
     const data = json.data || {};
     if (data.landingContent) localStorage.setItem(LANDING_CONTENT_KEY, JSON.stringify(data.landingContent));
     if (Array.isArray(data.materials)) {
@@ -42,7 +45,10 @@ async function loadRemoteConfig() {
 }
 
 async function saveRemoteConfig(key, value) {
-  if (!GOOGLE_SHEETS_URL) return;
+  if (!GOOGLE_SHEETS_URL || !remoteConfigAvailable) {
+    console.error('Server penyimpanan belum aktif. Redeploy Code.gs terlebih dahulu.');
+    return false;
+  }
   try {
     await fetch(GOOGLE_SHEETS_URL, {
       method: 'POST',
@@ -50,7 +56,9 @@ async function saveRemoteConfig(key, value) {
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({ action: 'saveConfig', key, value })
     });
+    return true;
   } catch (error) {}
+  return false;
 }
 const fallbackMateri = [
   { mapel: 'KJR', judul: 'Prinsip Keamanan Jaringan', deskripsi: 'Bangun kebiasaan aman untuk melindungi data dan infrastruktur digital.', link: 'materi/prinsip-keamanan-jaringan.pdf', level: 'Menengah' },
