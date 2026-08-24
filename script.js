@@ -23,7 +23,7 @@ let remoteConfigAvailable = false;
 async function loadRemoteConfig() {
   if (!GOOGLE_SHEETS_URL) return;
   try {
-    const response = await fetch(`${GOOGLE_SHEETS_URL}?action=config`, { cache: 'no-store' });
+    const response = await fetch(`${GOOGLE_SHEETS_URL}?action=config&t=${Date.now()}`, { cache: 'no-store' });
     const json = await response.json();
     if (!json.success || !json.data) throw new Error('Deployment Apps Script belum diperbarui.');
     remoteConfigAvailable = true;
@@ -41,6 +41,9 @@ async function loadRemoteConfig() {
         localStorage.setItem(QUIZ_MAPEL_KEY, data.quizSchedules[0].mapel);
       }
     }
+    updateQuizScheduleInfo();
+    renderLandingContent();
+    await loadMateri();
   } catch (error) {}
 }
 
@@ -828,6 +831,7 @@ async function initializeApp() {
   updateQuizScheduleInfo();
   renderLandingContent();
   await loadMateri();
+  setInterval(loadRemoteConfig, 10000);
 }
 
 initializeApp();
