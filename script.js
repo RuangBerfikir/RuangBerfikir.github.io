@@ -1,8 +1,7 @@
-const API_BASE = '';
 const GOOGLE_SHEETS_URL = 'https://script.google.com/macros/s/AKfycby98aKnuijXgx3WCJsL_ie9HHRR3DLoSJU6uApNMTbCscVW3_xVckw-fiOQvAXMhQ/exec'; // Isi dengan URL Web App Google Apps Script.
 const ADMIN_USERNAME = 'admin';
 const ADMIN_PASSWORD = 'tjkt2025';
-const DEFAULT_QUIZ_DURATION = 20;
+const DEFAULT_QUIZ_DURATION = 15;
 const QUIZ_DATE_KEY = 'ruangkelas.quizDate';
 const QUIZ_MAPEL_KEY = 'ruangkelas.quizMapel';
 const QUIZ_SCHEDULES_KEY = 'ruangkelas.quizSchedules';
@@ -19,17 +18,67 @@ const defaultLandingContent = {
 };
 let remoteMaterialsLoaded = false;
 let remoteConfigAvailable = false;
+let connectionStatus = 'loading'; // loading, connected, offline
+let lastSyncTime = null;
+
+function updateConnectionStatus(status, message = '') {
+  connectionStatus = status;
+  const badge = document.getElementById('connection-status');
+  if (!badge) return;
+  
+  badge.classList.remove('connection-loading', 'connection-connected', 'connection-offline');
+  badge.classList.add(`connection-${status}`);
+  
+  if (status === 'loading') {
+    badge.innerHTML = '<span></span> Menghubungkan...';
+    badge.title = 'Menyambung ke server...';
+  } else if (status === 'connected') {
+    badge.innerHTML = '<span></span> Tersambung';
+    badge.title = `Server terkoneksi${lastSyncTime ? ' • Diperbarui: ' + lastSyncTime : ''}`;
+  } else {
+    badge.innerHTML = '<span></span> Offline';
+    badge.title = 'Menggunakan data lokal (offline)';
+  }
+}
+
+function updateSyncIndicator(syncing = false) {
+  const indicator = document.getElementById('sync-indicator');
+  if (!indicator) return;
+  
+  if (syncing) {
+    indicator.classList.remove('synced');
+    indicator.classList.add('syncing');
+    indicator.textContent = '⟳ Sinkronisasi...';
+  } else {
+    indicator.classList.remove('syncing');
+    indicator.classList.add('synced');
+    indicator.textContent = '✓ Sinkron';
+  }
+}
 
 async function loadRemoteConfig() {
   if (!GOOGLE_SHEETS_URL) return;
+  
+  updateSyncIndicator(true);
   try {
-    const response = await fetch(`${GOOGLE_SHEETS_URL}?action=config&t=${Date.now()}`, { cache: 'no-store' });
+    // Tambah timeout 5 detik agar tidak menunggu terlalu lama
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Request timeout')), 5000)
+    );
+    
+    const response = await Promise.race([
+      fetch(`${GOOGLE_SHEETS_URL}?action=config&t=${Date.now()}`, { cache: 'no-store' }),
+      timeoutPromise
+    ]);
+    
     const json = await response.json();
     if (!json.success || !json.data) throw new Error('Deployment Apps Script belum diperbarui.');
     remoteConfigAvailable = true;
     const data = json.data || {};
     if (data.landingContent) localStorage.setItem(LANDING_CONTENT_KEY, JSON.stringify(data.landingContent));
     if (Array.isArray(data.materials)) {
+      // Tandai data dari server dengan source: 'server'
+      data.materials = data.materials.map(m => ({ ...m, source: 'server' }));
       localStorage.setItem(MATERIALS_KEY, JSON.stringify(data.materials));
       allMateri = data.materials;
       remoteMaterialsLoaded = true;
@@ -44,7 +93,15 @@ async function loadRemoteConfig() {
     updateQuizScheduleInfo();
     renderLandingContent();
     await loadMateri();
-  } catch (error) {}
+    
+    // Update status koneksi
+    updateConnectionStatus('connected');
+    updateSyncIndicator(false);
+    lastSyncTime = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+  } catch (error) {
+    updateConnectionStatus('offline');
+    updateSyncIndicator(false);
+  }
 }
 
 async function saveRemoteConfig(key, value) {
@@ -64,8 +121,9 @@ async function saveRemoteConfig(key, value) {
   return false;
 }
 const fallbackMateri = [
-  { mapel: 'KJR', judul: 'Prinsip Keamanan Jaringan', deskripsi: 'Bangun kebiasaan aman untuk melindungi data dan infrastruktur digital.', link: 'materi/prinsip-keamanan-jaringan.pdf', level: 'Menengah' },
-  { mapel: 'PKPJ', judul: 'Pemasangan dan Konfigurasi Perangkat Jaringan', deskripsi: 'Pelajari pemasangan kabel, konfigurasi perangkat, dan pengujian koneksi jaringan.', link: 'materi/pemasangan-konfigurasi-perangkat-jaringan.pdf', level: 'Pemula' }
+  { mapel: 'KJR', judul: 'Prinsip Keamanan Jaringan', deskripsi: 'Bangun kebiasaan aman untuk melindungi data dan infrastruktur digital.', link: 'materi/prinsip-keamanan-jaringan.pdf', level: 'Menengah', source: 'local' },
+  { mapel: 'PKPJ', judul: 'Pemasangan dan Konfigurasi Perangkat Jaringan', deskripsi: 'Pelajari pemasangan kabel, konfigurasi perangkat, dan pengujian koneksi jaringan.', link: 'materi/pemasangan-konfigurasi-perangkat-jaringan.pdf', level: 'Pemula', source: 'local' },
+  { mapel: 'TJKDN', judul: 'Teknologi Jaringan Kabel dan Nirkabel', deskripsi: 'Pelajari media transmisi kabel, jaringan Wi-Fi, dan teknologi penghubung perangkat.', link: '#', level: 'Pemula', source: 'local' }
 ];
 const fallbackKuis = {
   KJR: [
@@ -111,6 +169,18 @@ const fallbackKuis = {
     { soal: 'Perintah Cisco untuk melihat status interface adalah...', opsi: ['show ip interface brief', 'show interfaces off', 'display port all', 'list network'], jawaban: 0 },
     { soal: 'Kabel fiber optic mengirimkan data menggunakan...', opsi: ['Cahaya', 'Arus AC', 'Gelombang suara', 'Medan magnet saja'], jawaban: 0 },
     { soal: 'Tahap terakhir setelah konfigurasi perangkat jaringan adalah...', opsi: ['Pengujian koneksi dan dokumentasi', 'Mencabut semua kabel', 'Menghapus konfigurasi', 'Mematikan perangkat'], jawaban: 0 }
+  ],
+  TJKDN: [
+    { soal: 'Media transmisi yang menggunakan pulsa cahaya untuk mengirim data adalah...', opsi: ['Kabel fiber optic', 'Kabel coaxial', 'Kabel UTP', 'Gelombang radio'], jawaban: 0 },
+    { soal: 'Kabel UTP umumnya menggunakan konektor...', opsi: ['RJ45', 'RJ11', 'USB-C', 'HDMI'], jawaban: 0 },
+    { soal: 'Perangkat yang menyediakan akses jaringan Wi-Fi disebut...', opsi: ['Access point', 'Patch panel', 'Repeater pasif', 'Tang crimping'], jawaban: 0 },
+    { soal: 'Teknologi Wi-Fi menggunakan media transmisi berupa...', opsi: ['Gelombang radio', 'Cahaya tampak', 'Arus listrik langsung', 'Serat kaca'], jawaban: 0 },
+    { soal: 'Kabel twisted pair dipilin untuk mengurangi...', opsi: ['Interferensi elektromagnetik', 'Kapasitas penyimpanan', 'Kecepatan prosesor', 'Panjang alamat IP'], jawaban: 0 },
+    { soal: 'SSID pada jaringan nirkabel digunakan sebagai...', opsi: ['Nama jaringan Wi-Fi', 'Kata sandi router', 'Alamat fisik kabel', 'Jenis konektor'], jawaban: 0 },
+    { soal: 'Perangkat yang memperkuat atau meneruskan sinyal jaringan disebut...', opsi: ['Repeater', 'Printer', 'Scanner', 'Firewall'], jawaban: 0 },
+    { soal: 'Standar keamanan Wi-Fi yang lebih kuat daripada WEP adalah...', opsi: ['WPA2', 'FTP', 'HTTP', 'VGA'], jawaban: 0 },
+    { soal: 'Alat untuk menguji kontinuitas dan susunan kabel jaringan adalah...', opsi: ['LAN tester', 'Access point', 'Modem', 'Switch unmanaged'], jawaban: 0 },
+    { soal: 'Kelebihan utama jaringan nirkabel dibanding kabel adalah...', opsi: ['Mobilitas pengguna', 'Selalu lebih cepat', 'Tidak memerlukan keamanan', 'Tidak dipengaruhi jarak'], jawaban: 0 }
   ]
 };
 let allMateri = fallbackMateri;
@@ -122,21 +192,15 @@ let timerId = null;
 let remainingSeconds = DEFAULT_QUIZ_DURATION;
 let editingMaterialIndex = null;
 let editingQuizScheduleIndex = null;
-const mapelNames = { KJR: 'Keamanan', PKPJ: 'Pemasangan perangkat' };
+const mapelNames = { KJR: 'Keamanan', PKPJ: 'Pemasangan perangkat', TJKDN: 'Kabel dan nirkabel' };
 
 async function loadMateri() {
   const savedMaterials = remoteMaterialsLoaded ? null : await getSavedMaterials();
   if (savedMaterials) allMateri = savedMaterials;
-  if (API_BASE) {
-    try {
-      const res = await fetch(`${API_BASE}/materi`);
-      const json = await res.json();
-      if (!savedMaterials && json.data?.length) allMateri = json.data.filter(m => ['KJR', 'PKPJ'].includes(m.mapel));
-    } catch (err) {}
-  }
   updateModuleCount();
   if (!document.getElementById('materi-container')) return;
   renderMateri();
+  updateQuizScheduleInfo();
 }
 
 function updateModuleCount() {
@@ -292,7 +356,14 @@ function renderMateri() {
   const query = document.getElementById('search-materi')?.value.toLowerCase() || '';
   const filter = document.getElementById('filter-mapel')?.value || 'all';
   const items = allMateri.filter(m => (filter === 'all' || m.mapel === filter) && `${m.judul} ${m.deskripsi}`.toLowerCase().includes(query));
-  document.getElementById('materi-container').innerHTML = items.length ? items.map(m => { const index = allMateri.indexOf(m); return `<article class="material"><span class="tag">${mapelNames[m.mapel] || m.mapel}</span><h3>${m.judul}</h3><p>${m.deskripsi}</p><a href="${m.link || '#'}" target="_blank">Buka materi &nbsp;→</a><div class="material-actions admin-only"><button onclick="openMaterialEditor(${index})">Edit</button><button onclick="deleteMaterial(${index})">Hapus</button></div></article>`; }).join('') : '<p style="color:var(--muted)">Materi tidak ditemukan.</p>';
+  document.getElementById('materi-container').innerHTML = items.length ? items.map(m => { 
+    const index = allMateri.indexOf(m);
+    const quizLink = m.mapel === 'TJKDN' ? '<a href="kuis.html?mapel=TJKDN">Kerjakan kuis &nbsp;→</a>' : '';
+    const sourceClass = remoteMaterialsLoaded && m.source !== 'local' ? 'source-server' : 'source-local';
+    const sourceLabel = remoteMaterialsLoaded && m.source !== 'local' ? 'Server' : 'Lokal';
+    const sourceBadge = `<span class="tag source-badge ${sourceClass}">${sourceLabel}</span>`;
+    return `<article class="material"><div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px"><span class="tag">${mapelNames[m.mapel] || m.mapel}</span>${sourceBadge}</div><h3>${m.judul}</h3><p>${m.deskripsi}</p><a href="${m.link || '#'}" target="_blank">Buka materi &nbsp;→</a>${quizLink}<div class="material-actions admin-only"><button onclick="openMaterialEditor(${index})">Edit</button><button onclick="deleteMaterial(${index})">Hapus</button></div></article>`; 
+  }).join('') : '<p style="color:var(--muted)">Materi tidak ditemukan.</p>';
 }
 
 async function addLocalMaterials(files) {
@@ -304,7 +375,8 @@ async function addLocalMaterials(files) {
       mapel,
       judul: file.name.replace(/\.[^/.]+$/, ''),
       deskripsi: `File lokal ${file.name}.`,
-      link: reader.result
+      link: reader.result,
+      source: 'local'
     });
     reader.onerror = () => reject(new Error(`File ${file.name} tidak dapat dibaca.`));
     reader.readAsDataURL(file);
@@ -347,7 +419,7 @@ async function saveMaterial() {
   const deskripsi = document.getElementById('editor-deskripsi').value.trim();
   const link = document.getElementById('editor-link').value.trim();
   if (!judul || !deskripsi || !link) return alert('Judul, deskripsi, dan link materi wajib diisi.');
-  const material = { mapel: document.getElementById('editor-mapel').value, judul, deskripsi, link };
+  const material = { mapel: document.getElementById('editor-mapel').value, judul, deskripsi, link, source: 'local' };
   if (editingMaterialIndex === null) allMateri.push(material);
   else allMateri[editingMaterialIndex] = material;
   if (!await saveMaterials()) return;
@@ -364,15 +436,17 @@ async function deleteMaterial(index) {
 
 function addPkpjOptions() {
   const options = {
-    'filter-mapel': ['PKPJ', 'Pemasangan perangkat jaringan'],
-    'editor-mapel': ['PKPJ', 'Pemasangan perangkat jaringan'],
-    'upload-mapel': ['PKPJ', 'Pemasangan perangkat jaringan'],
-    'select-mapel': ['PKPJ', 'Pemasangan dan Konfigurasi Perangkat Jaringan']
+    'filter-mapel': [['PKPJ', 'Pemasangan perangkat jaringan'], ['TJKDN', 'Kabel dan nirkabel']],
+    'editor-mapel': [['PKPJ', 'Pemasangan perangkat jaringan'], ['TJKDN', 'Kabel dan nirkabel']],
+    'upload-mapel': [['PKPJ', 'Pemasangan perangkat jaringan'], ['TJKDN', 'Kabel dan nirkabel']],
+    'select-mapel': [['PKPJ', 'Pemasangan dan Konfigurasi Perangkat Jaringan'], ['TJKDN', 'Teknologi Jaringan Kabel dan Nirkabel']]
   };
-  Object.entries(options).forEach(([selectId, [value, label]]) => {
+  Object.entries(options).forEach(([selectId, optionList]) => {
     const select = document.getElementById(selectId);
-    if (!select || select.querySelector(`option[value="${value}"]`)) return;
-    select.add(new Option(label, value));
+    if (!select) return;
+    optionList.forEach(([value, label]) => {
+      if (!select.querySelector(`option[value="${value}"]`)) select.add(new Option(label, value));
+    });
   });
 }
 
@@ -443,10 +517,6 @@ function getQuizDate() {
   return getActiveQuizSchedule()?.date || '';
 }
 
-function getQuizMapel() {
-  return getActiveQuizSchedule()?.mapel || 'KJR';
-}
-
 function getQuizSchedules() {
   try {
     const saved = JSON.parse(localStorage.getItem(QUIZ_SCHEDULES_KEY) || 'null');
@@ -489,7 +559,7 @@ function saveQuizSchedules(schedules) {
 }
 
 function getQuizMapelName(mapel) {
-  return { KJR: 'Keamanan Jaringan', PKPJ: 'Pemasangan dan Konfigurasi Perangkat Jaringan' }[mapel] || mapel;
+  return { KJR: 'Keamanan Jaringan', PKPJ: 'Pemasangan dan Konfigurasi Perangkat Jaringan', TJKDN: 'Teknologi Jaringan Kabel dan Nirkabel' }[mapel] || mapel;
 }
 
 function ensureQuizMapelControl() {
@@ -498,7 +568,7 @@ function ensureQuizMapelControl() {
   const select = document.createElement('select');
   select.id = 'quiz-mapel';
   select.setAttribute('aria-label', 'Mata pelajaran kuis');
-  select.innerHTML = '<option value="KJR">Keamanan Jaringan</option><option value="PKPJ">Pemasangan dan Konfigurasi Perangkat Jaringan</option>';
+  select.innerHTML = '<option value="KJR">Keamanan Jaringan</option><option value="PKPJ">Pemasangan dan Konfigurasi Perangkat Jaringan</option><option value="TJKDN">Teknologi Jaringan Kabel dan Nirkabel</option>';
   dateInput.parentElement.parentElement.insertBefore(select, dateInput.parentElement);
   const label = document.createElement('label');
   label.htmlFor = 'quiz-mapel';
@@ -609,16 +679,13 @@ function getTodayDate() {
 function renderQuizScheduleList(schedules) {
   const scheduleDetails = document.querySelector('.schedule-details');
   if (!scheduleDetails) return;
-  let list = document.getElementById('quiz-schedule-list');
-  if (!list) {
-    list = document.createElement('div');
-    list.id = 'quiz-schedule-list';
-    list.style.display = 'grid';
-    list.style.gap = '10px';
-    scheduleDetails.before(list);
-  }
-  list.innerHTML = schedules.length ? schedules.map(schedule => `<div style="display:grid;gap:5px;padding:14px;background:var(--paper);border-radius:8px"><span style="color:var(--muted);font-size:12px">${getQuizMapelName(schedule.mapel)}</span><strong style="color:var(--ink);font-size:14px">Kuis dapat dikerjakan pada ${formatQuizDate(schedule.date)}</strong></div>`).join('') : '';
-  scheduleDetails.classList.toggle('hidden', schedules.length > 0);
+  const mapelList = [...new Set(allMateri.map(material => material.mapel))];
+  const displayedMapel = mapelList.length ? mapelList : ['KJR'];
+  scheduleDetails.innerHTML = displayedMapel.map(mapel => {
+    const schedule = schedules.find(item => item.mapel === mapel);
+    return `<div><span>Mata pelajaran</span><strong>${getQuizMapelName(mapel)}</strong><span>Hari pelaksanaan</span><strong>${schedule ? formatQuizDate(schedule.date) : 'Belum ditentukan'}</strong></div>`;
+  }).join('');
+  scheduleDetails.classList.remove('hidden');
 }
 
 function updateQuizScheduleInfo() {
@@ -646,7 +713,12 @@ function updateQuizScheduleInfo() {
   if (adminStatus) adminStatus.textContent = scheduleMessage;
   const selectedMapel = document.getElementById('select-mapel')?.value;
   const selectedSchedule = selectedMapel ? getQuizScheduleForMapel(selectedMapel) : activeSchedule;
-  if (button) button.disabled = Boolean(schedules.length && (!selectedSchedule || selectedSchedule.date !== getTodayDate()));
+  if (button) {
+    button.disabled = false;
+    button.title = schedules.length && (!selectedSchedule || selectedSchedule.date !== getTodayDate())
+      ? 'Kuis belum tersedia sesuai jadwal.'
+      : '';
+  }
 }
 
 function logoutAdmin() {
@@ -658,7 +730,7 @@ function logoutAdmin() {
   renderMateri();
 }
 
-async function loadKuis() {
+function loadKuis() {
   const mapel = document.getElementById('select-mapel').value;
   const schedules = getQuizSchedules();
   const quizSchedule = getQuizScheduleForMapel(mapel);
@@ -688,13 +760,6 @@ async function loadKuis() {
   score = 0;
   selectedAnswers = [];
   currentKuisData = fallbackKuis[mapel];
-  try {
-    if (API_BASE) {
-      const res = await fetch(`${API_BASE}/kuis/${mapel}`);
-      const json = await res.json();
-      if (json.data?.length >= 20) currentKuisData = json.data.slice(0, 20);
-    }
-  } catch (err) {}
   document.getElementById('kuis-container').classList.remove('hidden');
   document.getElementById('hasil-kuis').className = 'hidden';
   document.getElementById('btn-next').style.display = 'block';
@@ -824,14 +889,36 @@ document.getElementById('landing-image-file')?.addEventListener('change', event 
   }
 });
 addPkpjOptions();
+const quizMapelParam = new URLSearchParams(window.location.search).get('mapel');
+if (quizMapelParam === 'TJKDN' && document.getElementById('select-mapel')) {
+  document.getElementById('select-mapel').value = quizMapelParam;
+  updateQuizScheduleInfo();
+}
 restrictClassOptions();
 updateMainNavigation();
 async function initializeApp() {
-  await loadRemoteConfig();
+  // Set initial connection status
+  updateConnectionStatus('loading');
+  updateSyncIndicator(false);
+  
+  // Load fallback data immediately
   updateQuizScheduleInfo();
   renderLandingContent();
   await loadMateri();
-  setInterval(loadRemoteConfig, 10000);
+  
+  // Load remote config in background (non-blocking)
+  loadRemoteConfig().then(() => {
+    updateQuizScheduleInfo();
+    renderLandingContent();
+    renderMateri();
+  });
+  
+  // Refresh config setiap 10 detik
+  setInterval(() => {
+    loadRemoteConfig().then(() => {
+      renderMateri();
+    });
+  }, 10000);
 }
 
 initializeApp();
