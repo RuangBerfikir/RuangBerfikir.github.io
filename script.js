@@ -56,6 +56,68 @@ function updateSyncIndicator(syncing = false) {
   }
 }
 
+// Toast Notification System
+function showToast(message, type = 'info', duration = 4000) {
+  const container = document.getElementById('toast-container');
+  if (!container) return;
+  
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`;
+  toast.innerHTML = `<div class="toast-message">${message}</div>`;
+  
+  container.appendChild(toast);
+  
+  // Auto remove after duration
+  setTimeout(() => {
+    toast.classList.add('removing');
+    setTimeout(() => toast.remove(), 300);
+  }, duration);
+}
+
+// URL Validation
+function isValidUrl(urlString) {
+  try {
+    const url = new URL(urlString);
+    return url.protocol === 'http:' || url.protocol === 'https:' || urlString.startsWith('gs://') || urlString.startsWith('drive.google.com');
+  } catch (_) {
+    return false;
+  }
+}
+
+// Material Validation
+function validateMaterial(judul, deskripsi, link) {
+  if (!judul || judul.trim().length < 3) {
+    showToast('Judul materi minimal 3 karakter', 'error');
+    return false;
+  }
+  if (!deskripsi || deskripsi.trim().length < 10) {
+    showToast('Deskripsi materi minimal 10 karakter', 'error');
+    return false;
+  }
+  if (!link || link.trim().length === 0) {
+    showToast('Link materi harus diisi', 'error');
+    return false;
+  }
+  if (!isValidUrl(link)) {
+    showToast('Format link tidak valid. Gunakan URL atau Google Drive link', 'error');
+    return false;
+  }
+  return true;
+}
+
+// Set button loading state
+function setButtonLoading(button, isLoading) {
+  if (!button) return;
+  if (isLoading) {
+    button.disabled = true;
+    button.dataset.originalText = button.textContent;
+    button.textContent = '⟳ Menyimpan...';
+  } else {
+    button.disabled = false;
+    button.textContent = button.dataset.originalText || 'Simpan';
+  }
+}
+
 async function loadRemoteConfig() {
   if (!GOOGLE_SHEETS_URL) return;
   
@@ -358,12 +420,44 @@ function renderMateri() {
   const items = allMateri.filter(m => (filter === 'all' || m.mapel === filter) && `${m.judul} ${m.deskripsi}`.toLowerCase().includes(query));
   document.getElementById('materi-container').innerHTML = items.length ? items.map(m => { 
     const index = allMateri.indexOf(m);
-    const quizLink = m.mapel === 'TJKDN' ? '<a href="kuis.html?mapel=TJKDN">Kerjakan kuis &nbsp;→</a>' : '';
     const sourceClass = remoteMaterialsLoaded && m.source !== 'local' ? 'source-server' : 'source-local';
     const sourceLabel = remoteMaterialsLoaded && m.source !== 'local' ? 'Server' : 'Lokal';
     const sourceBadge = `<span class="tag source-badge ${sourceClass}">${sourceLabel}</span>`;
-    return `<article class="material"><div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px"><span class="tag">${mapelNames[m.mapel] || m.mapel}</span>${sourceBadge}</div><h3>${m.judul}</h3><p>${m.deskripsi}</p><a href="${m.link || '#'}" target="_blank">Buka materi &nbsp;→</a>${quizLink}<div class="material-actions admin-only"><button onclick="openMaterialEditor(${index})">Edit</button><button onclick="deleteMaterial(${index})">Hapus</button></div></article>`; 
+    const adminActions = `<div class="material-actions admin-only"><button onclick="openMaterialEditor(${index})" title="Edit materi">✎ Edit</button><button onclick="deleteMaterial(${index})" title="Hapus materi">✕ Hapus</button></div>`;
+    return `<article class="material"><div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px"><span class="tag">${mapelNames[m.mapel] || m.mapel}</span>${sourceBadge}</div><h3>${m.judul}</h3><p>${m.deskripsi}</p><a href="${m.link || '#'}" target="_blank">Buka materi &nbsp;→</a>${adminActions}</article>`; 
   }).join('') : '<p style="color:var(--muted)">Materi tidak ditemukan.</p>';
+}
+
+function renderMaterialsTable() {
+  const tbody = document.getElementById('materi-table-body');
+  const emptyMsg = document.getElementById('materi-empty-message');
+  if (!tbody) return;
+  
+  if (allMateri.length === 0) {
+    tbody.innerHTML = '';
+    if (emptyMsg) emptyMsg.style.display = 'block';
+    return;
+  }
+  
+  if (emptyMsg) emptyMsg.style.display = 'none';
+  
+  tbody.innerHTML = allMateri.map((m, index) => {
+    const mapelLabel = mapelNames[m.mapel] || m.mapel;
+    const sourceLabel = m.source === 'local' ? 'Lokal' : 'Server';
+    const mapelClass = `mapel-${m.mapel.toLowerCase()}`;
+    const sourceClass = m.source === 'local' ? 'source-lokal' : 'source-server';
+    
+    return `<tr>
+      <td>${index + 1}</td>
+      <td><strong>${m.judul}</strong></td>
+      <td><span class="mapel-badge ${mapelClass}">${mapelLabel}</span></td>
+      <td><span class="source-badge ${sourceClass}">${sourceLabel}</span></td>
+      <td><div class="action-buttons">
+        <button class="btn-edit" onclick="openMaterialEditor(${index})" title="Edit materi">✎ Edit</button>
+        <button class="btn-delete" onclick="deleteMaterial(${index})" title="Hapus materi">✕ Hapus</button>
+      </div></td>
+    </tr>`;
+  }).join('');
 }
 
 async function addLocalMaterials(files) {
@@ -389,6 +483,8 @@ async function addLocalMaterials(files) {
       return;
     }
     renderMateri();
+    renderMaterialsTable();
+    displayMaterialInfo();
     alert(`${materials.length} materi berhasil disimpan.`);
     document.getElementById('file-materi').value = '';
   } catch (err) {
@@ -418,20 +514,171 @@ async function saveMaterial() {
   const judul = document.getElementById('editor-judul').value.trim();
   const deskripsi = document.getElementById('editor-deskripsi').value.trim();
   const link = document.getElementById('editor-link').value.trim();
-  if (!judul || !deskripsi || !link) return alert('Judul, deskripsi, dan link materi wajib diisi.');
-  const material = { mapel: document.getElementById('editor-mapel').value, judul, deskripsi, link, source: 'local' };
-  if (editingMaterialIndex === null) allMateri.push(material);
-  else allMateri[editingMaterialIndex] = material;
-  if (!await saveMaterials()) return;
-  closeMaterialEditor();
-  renderMateri();
+  const mapel = document.getElementById('editor-mapel').value;
+  
+  // Validate input
+  if (!validateMaterial(judul, deskripsi, link)) return;
+  
+  // Set loading state
+  const saveBtn = document.querySelector('.save-button');
+  setButtonLoading(saveBtn, true);
+  
+  try {
+    const material = { mapel, judul, deskripsi, link, source: 'local', createdAt: new Date().toISOString() };
+    const isEditing = editingMaterialIndex !== null;
+    
+    if (isEditing) {
+      // Preserve original createdAt if updating
+      if (allMateri[editingMaterialIndex].createdAt) {
+        material.createdAt = allMateri[editingMaterialIndex].createdAt;
+      }
+      allMateri[editingMaterialIndex] = material;
+    } else {
+      allMateri.push(material);
+    }
+    
+    // Save to storage
+    if (!await saveMaterials()) {
+      showToast('Gagal menyimpan materi. Silakan coba lagi', 'error');
+      return;
+    }
+    
+    closeMaterialEditor();
+    renderMateri();
+    renderMaterialsTable();
+    displayMaterialInfo();
+    showToast(isEditing ? 'Materi berhasil diperbarui' : 'Materi berhasil ditambahkan', 'success');
+  } catch (error) {
+    showToast(`Error: ${error.message}`, 'error');
+  } finally {
+    setButtonLoading(saveBtn, false);
+  }
 }
 
 async function deleteMaterial(index) {
-  if (!confirm(`Hapus materi "${allMateri[index].judul}"?`)) return;
-  allMateri.splice(index, 1);
-  if (!await saveMaterials()) return;
-  renderMateri();
+  const material = allMateri[index];
+  if (!material) return;
+  
+  // Confirmation
+  if (!confirm(`Yakin hapus materi "${material.judul}"?\n\nTindakan ini tidak dapat dibatalkan.`)) return;
+  
+  try {
+    allMateri.splice(index, 1);
+    if (!await saveMaterials()) {
+      allMateri.splice(index, 0, material); // Restore if failed
+      showToast('Gagal menghapus materi. Silakan coba lagi', 'error');
+      return;
+    }
+    renderMateri();
+    renderMaterialsTable();
+    displayMaterialInfo();
+    showToast(`Materi "${material.judul}" berhasil dihapus`, 'success');
+  } catch (error) {
+    showToast(`Error: ${error.message}`, 'error');
+  }
+}
+
+// Export materi ke JSON
+function exportMaterials() {
+  try {
+    const dataStr = JSON.stringify(allMateri, null, 2);
+    const dataBlob = new Blob([dataStr], { type: 'application/json' });
+    const url = URL.createObjectURL(dataBlob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `materi_${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    showToast(`${allMateri.length} materi berhasil diekspor`, 'success');
+  } catch (error) {
+    showToast(`Gagal mengekspor: ${error.message}`, 'error');
+  }
+}
+
+// Import materi dari JSON
+function importMaterials() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json';
+  input.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    try {
+      const text = await file.text();
+      const imported = JSON.parse(text);
+      
+      if (!Array.isArray(imported)) throw new Error('Format file tidak valid');
+      
+      // Validate structure
+      const valid = imported.every(m => m.judul && m.deskripsi && m.link && m.mapel);
+      if (!valid) throw new Error('Beberapa materi tidak memiliki data lengkap');
+      
+      if (!confirm(`Import ${imported.length} materi?\n\nMateri yang sudah ada akan dipertahankan.`)) return;
+      
+      // Add imported materials with source: 'imported'
+      const newMaterials = imported.map(m => ({
+        ...m,
+        source: m.source || 'imported',
+        createdAt: m.createdAt || new Date().toISOString()
+      }));
+      
+      allMateri.push(...newMaterials);
+      
+      if (!await saveMaterials()) {
+        allMateri.splice(-newMaterials.length, newMaterials.length);
+        throw new Error('Gagal menyimpan materi');
+      }
+      
+      renderMateri();
+      displayMaterialInfo();
+      showToast(`${imported.length} materi berhasil diimpor`, 'success');
+    } catch (error) {
+      showToast(`Error import: ${error.message}`, 'error');
+    }
+  };
+  input.click();
+}
+
+// Get material statistics
+function getMaterialStats() {
+  return {
+    total: allMateri.length,
+    byMapel: {
+      'KJR': allMateri.filter(m => m.mapel === 'KJR').length,
+      'PKPJ': allMateri.filter(m => m.mapel === 'PKPJ').length,
+      'TJKDN': allMateri.filter(m => m.mapel === 'TJKDN').length
+    },
+    bySource: {
+      'server': allMateri.filter(m => m.source === 'server').length,
+      'local': allMateri.filter(m => m.source === 'local' || m.source === 'imported').length
+    }
+  };
+}
+
+// Display material management info
+function displayMaterialInfo() {
+  const stats = getMaterialStats();
+  const adminPanel = document.getElementById('admin-panel');
+  if (adminPanel) {
+    const infoDiv = adminPanel.querySelector('div:first-child');
+    if (infoDiv) {
+      const info = `Total: <strong>${stats.total}</strong> | KJR: <strong>${stats.byMapel.KJR}</strong> | PKPJ: <strong>${stats.byMapel.PKPJ}</strong> | TJKDN: <strong>${stats.byMapel.TJKDN}</strong>`;
+      infoDiv.innerHTML = `<div><strong>Panel admin - Materi</strong><span>${info}</span></div>`;
+    }
+  }
+  
+  // Update stats di admin.html
+  const statTotal = document.getElementById('stat-total');
+  const statKjr = document.getElementById('stat-kjr');
+  const statPkpj = document.getElementById('stat-pkpj');
+  const statTjkdn = document.getElementById('stat-tjkdn');
+  if (statTotal) statTotal.textContent = stats.total;
+  if (statKjr) statKjr.textContent = stats.byMapel.KJR;
+  if (statPkpj) statPkpj.textContent = stats.byMapel.PKPJ;
+  if (statTjkdn) statTjkdn.textContent = stats.byMapel.TJKDN;
 }
 
 function addPkpjOptions() {
@@ -511,6 +758,8 @@ function loginAdmin(event) {
   if (quizDateInput) quizDateInput.value = getQuizDate();
   loadLandingEditor();
   renderMateri();
+  displayMaterialInfo();
+  showToast('Login admin berhasil', 'success');
 }
 
 function getQuizDate() {
@@ -642,7 +891,7 @@ function saveQuizDate() {
   updateQuizScheduleInfo();
 }
 
-function loginAdminPage(event) {
+async function loginAdminPage(event) {
   event.preventDefault();
   const username = document.getElementById('admin-page-username').value.trim();
   const password = document.getElementById('admin-page-password').value;
@@ -657,7 +906,10 @@ function loginAdminPage(event) {
   ensureQuizMapelControl();
   loadQuizScheduleRows();
   renderAdminQuizSchedules();
+  await loadMateri();
   renderMateri();
+  renderMaterialsTable();
+  displayMaterialInfo();
   updateQuizScheduleInfo();
 }
 
