@@ -4,6 +4,7 @@ const ADMIN_PASSWORD = 'tjkt2025';
 const DEFAULT_QUIZ_DURATION = 15;
 const QUIZ_DATE_KEY = 'ruangkelas.quizDate';
 const QUIZ_MAPEL_KEY = 'ruangkelas.quizMapel';
+
 const QUIZ_SCHEDULES_KEY = 'ruangkelas.quizSchedules';
 const MATERIALS_KEY = 'ruangkelas.materials';
 const MATERIALS_DB_NAME = 'ruangkelas.db';
@@ -220,6 +221,18 @@ async function loadRemoteConfig() {
     updateSyncIndicator(false);
     lastSyncTime = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
   } catch (error) {
+    const hasLocalData = Boolean(
+      localStorage.getItem(MATERIALS_KEY) ||
+      localStorage.getItem(LANDING_CONTENT_KEY) ||
+      allMateri.length
+    );
+
+    if (hasLocalData) {
+      updateConnectionStatus('connected');
+      updateSyncIndicator(false);
+      return;
+    }
+
     updateConnectionStatus('offline');
     updateSyncIndicator(false);
   }
@@ -1430,6 +1443,16 @@ async function initializeApp() {
   updateQuizScheduleInfo();
   renderLandingContent();
   await loadMateri();
+
+  const hasLocalData = Boolean(
+    localStorage.getItem(MATERIALS_KEY) ||
+    localStorage.getItem(LANDING_CONTENT_KEY) ||
+    allMateri.length
+  );
+
+  if (hasLocalData) {
+    updateConnectionStatus('connected');
+  }
   
   // Load remote config in background (non-blocking)
   loadRemoteConfig().then(() => {
