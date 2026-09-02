@@ -1,4 +1,4 @@
-const GOOGLE_SHEETS_URL = 'https://script.google.com/macros/s/AKfycby98aKnuijXgx3WCJsL_ie9HHRR3DLoSJU6uApNMTbCscVW3_xVckw-fiOQvAXMhQ/exec'; // Isi dengan URL Web App Google Apps Script.
+const GOOGLE_SHEETS_URL = 'https://script.google.com/macros/s/AKfycbyHTnDp60Xkep4iszpN5E4Qp9FZCxoxoxiOk2iMmrRI6MJkyGyoxyX1VDgRVDIysHA/exec'; // Isi dengan URL Web App Google Apps Script.
 const ADMIN_USERNAME = 'admin';
 const ADMIN_PASSWORD = 'tjkt2025';
 const DEFAULT_QUIZ_DURATION = 15;
@@ -76,16 +76,41 @@ function showToast(message, type = 'info', duration = 4000) {
 
 // URL Validation
 function isValidUrl(urlString) {
+  const value = urlString.trim();
+  if (!value) return false;
+
+  if (value.startsWith('gs://') || value.startsWith('drive.google.com')) return true;
+  if (value.startsWith('/') || value.startsWith('./') || value.startsWith('../')) return true;
+
+  const relativePathPattern = /^(?:[A-Za-z0-9._\-/]+\.[A-Za-z0-9]+|[A-Za-z0-9._\-/]+)$/;
+  if (relativePathPattern.test(value) && (value.includes('/') || value.includes('.') || value.includes('\\'))) {
+    return true;
+  }
+
   try {
-    const url = new URL(urlString);
-    return url.protocol === 'http:' || url.protocol === 'https:' || urlString.startsWith('gs://') || urlString.startsWith('drive.google.com');
+    const url = new URL(value, window.location.origin);
+    return url.protocol === 'http:' || url.protocol === 'https:' || url.protocol === 'file:';
   } catch (_) {
     return false;
   }
 }
 
+function normalizeMaterialLinks(value) {
+  if (Array.isArray(value)) {
+    return value.map(item => String(item).trim()).filter(Boolean);
+  }
+  if (typeof value !== 'string') return [];
+  return value
+    .split(/\r?\n|,/) 
+    .map(item => item.trim())
+    .filter(Boolean)
+    .filter(item => item !== '|' && item !== ';');
+}
+
 // Material Validation
 function validateMaterial(judul, deskripsi, link) {
+  const links = normalizeMaterialLinks(link);
+
   if (!judul || judul.trim().length < 3) {
     showToast('Judul materi minimal 3 karakter', 'error');
     return false;
@@ -94,11 +119,12 @@ function validateMaterial(judul, deskripsi, link) {
     showToast('Deskripsi materi minimal 10 karakter', 'error');
     return false;
   }
-  if (!link || link.trim().length === 0) {
+  if (!links.length) {
     showToast('Link materi harus diisi', 'error');
     return false;
   }
-  if (!isValidUrl(link)) {
+  const invalidLink = links.find(item => !isValidUrl(item));
+  if (invalidLink) {
     showToast('Format link tidak valid. Gunakan URL atau Google Drive link', 'error');
     return false;
   }
@@ -116,6 +142,38 @@ function setButtonLoading(button, isLoading) {
     button.disabled = false;
     button.textContent = button.dataset.originalText || 'Simpan';
   }
+}
+
+function getMaterialSignature(material = {}) {
+  return `${(material.mapel || '').toLowerCase()}::${(material.judul || '').trim().toLowerCase()}::${(material.link || '').trim().toLowerCase()}`;
+}
+
+function mergeMaterials(localItems = [], remoteItems = []) {
+  const merged = new Map();
+  const localArray = Array.isArray(localItems) ? localItems : [];
+  const remoteArray = Array.isArray(remoteItems) ? remoteItems : [];
+
+  remoteArray.forEach(item => {
+    const normalized = { ...item, source: item.source || 'server' };
+    merged.set(getMaterialSignature(normalized), normalized);
+  });
+
+  localArray.forEach(item => {
+    const normalized = { ...item, source: item.source || 'local' };
+    const key = getMaterialSignature(normalized);
+    const existing = merged.get(key);
+
+    if (!existing) {
+      merged.set(key, normalized);
+      return;
+    }
+
+    if ((item.createdAt || '') > (existing.createdAt || '')) {
+      merged.set(key, normalized);
+    }
+  });
+
+  return [...merged.values()];
 }
 
 async function loadRemoteConfig() {
@@ -139,10 +197,11 @@ async function loadRemoteConfig() {
     const data = json.data || {};
     if (data.landingContent) localStorage.setItem(LANDING_CONTENT_KEY, JSON.stringify(data.landingContent));
     if (Array.isArray(data.materials)) {
-      // Tandai data dari server dengan source: 'server'
-      data.materials = data.materials.map(m => ({ ...m, source: 'server' }));
-      localStorage.setItem(MATERIALS_KEY, JSON.stringify(data.materials));
-      allMateri = data.materials;
+      const localSavedMaterials = (await getSavedMaterials()) || [];
+      const remoteMaterials = data.materials.map(m => ({ ...m, source: 'server' }));
+      const mergedMaterials = mergeMaterials(localSavedMaterials, remoteMaterials);
+      localStorage.setItem(MATERIALS_KEY, JSON.stringify(mergedMaterials));
+      allMateri = mergedMaterials;
       remoteMaterialsLoaded = true;
     }
     if (Array.isArray(data.quizSchedules)) {
@@ -167,10 +226,11 @@ async function loadRemoteConfig() {
 }
 
 async function saveRemoteConfig(key, value) {
-  if (!GOOGLE_SHEETS_URL || !remoteConfigAvailable) {
-    console.error('Server penyimpanan belum aktif. Redeploy Code.gs terlebih dahulu.');
+  if (!GOOGLE_SHEETS_URL) {
+    console.error('URL Web App Google Apps Script belum diatur.');
     return false;
   }
+
   try {
     await fetch(GOOGLE_SHEETS_URL, {
       method: 'POST',
@@ -178,8 +238,11 @@ async function saveRemoteConfig(key, value) {
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({ action: 'saveConfig', key, value })
     });
+    remoteConfigAvailable = true;
     return true;
-  } catch (error) {}
+  } catch (error) {
+    console.error('Gagal menyimpan data ke Sheet:', error);
+  }
   return false;
 }
 const fallbackMateri = [
@@ -412,6 +475,46 @@ async function saveMaterials() {
   }
 }
 
+function openMaterialLink(url, event) {
+  if (!url || url === '#') return true;
+
+  const normalizedUrl = String(url).toLowerCase();
+  const isPdf = normalizedUrl.endsWith('.pdf') || normalizedUrl.includes('application/pdf') || normalizedUrl.startsWith('data:application/pdf');
+
+  if (!isPdf) return true;
+
+  event?.preventDefault();
+  const pdfWindow = window.open('', '_blank', 'width=1200,height=900');
+
+  if (!pdfWindow) {
+    window.location.href = url;
+    return false;
+  }
+
+  pdfWindow.document.write(`<!DOCTYPE html>
+    <html lang="id">
+      <head>
+        <meta charset="UTF-8">
+        <title>Preview materi</title>
+        <style>
+          html, body { margin: 0; height: 100%; background: #1d1d1d; }
+          body { display: flex; }
+          iframe { width: 100%; height: 100%; border: 0; background: white; }
+        </style>
+      </head>
+      <body>
+        <iframe src="${url}" title="Preview materi" type="application/pdf"></iframe>
+      </body>
+    </html>`);
+  pdfWindow.document.close();
+  return false;
+}
+
+function getMaterialLinks(material) {
+  const links = normalizeMaterialLinks(material.link);
+  return links.length ? links : [material.link || '#'];
+}
+
 function renderMateri() {
   updateModuleCount();
   if (!document.getElementById('materi-container')) return;
@@ -424,7 +527,12 @@ function renderMateri() {
     const sourceLabel = remoteMaterialsLoaded && m.source !== 'local' ? 'Server' : 'Lokal';
     const sourceBadge = `<span class="tag source-badge ${sourceClass}">${sourceLabel}</span>`;
     const adminActions = `<div class="material-actions admin-only"><button onclick="openMaterialEditor(${index})" title="Edit materi">✎ Edit</button><button onclick="deleteMaterial(${index})" title="Hapus materi">✕ Hapus</button></div>`;
-    return `<article class="material"><div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px"><span class="tag">${mapelNames[m.mapel] || m.mapel}</span>${sourceBadge}</div><h3>${m.judul}</h3><p>${m.deskripsi}</p><a href="${m.link || '#'}" target="_blank">Buka materi &nbsp;→</a>${adminActions}</article>`; 
+    const links = getMaterialLinks(m);
+    const linksHtml = links.map((link, idx) => {
+      const label = links.length > 1 ? `Buka materi ${idx + 1}` : 'Buka materi';
+      return `<a href="${link}" target="_blank" rel="noopener noreferrer" onclick="return openMaterialLink(this.href, event)">${label} &nbsp;→</a>`;
+    }).join('');
+    return `<article class="material"><div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px"><span class="tag">${mapelNames[m.mapel] || m.mapel}</span>${sourceBadge}</div><h3>${m.judul}</h3><p>${m.deskripsi}</p><div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center">${linksHtml}</div>${adminActions}</article>`; 
   }).join('') : '<p style="color:var(--muted)">Materi tidak ditemukan.</p>';
 }
 
@@ -493,38 +601,203 @@ async function addLocalMaterials(files) {
   }
 }
 
+function ensureMaterialLinkEditor() {
+  const editor = document.getElementById('material-editor');
+  if (!editor) return;
+
+  let container = document.getElementById('material-links-container');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'material-links-container';
+    container.style.display = 'flex';
+    container.style.flexDirection = 'column';
+    container.style.gap = '8px';
+    editor.appendChild(container);
+  }
+
+  const firstInput = container.querySelector('.material-link-input');
+  if (!firstInput) {
+    const wrapper = document.createElement('div');
+    wrapper.style.display = 'flex';
+    wrapper.style.alignItems = 'center';
+    wrapper.style.gap = '8px';
+
+    const input = document.createElement('input');
+    input.id = 'editor-link';
+    input.type = 'url';
+    input.className = 'material-link-input';
+    input.placeholder = 'Link file atau Google Drive';
+    input.setAttribute('aria-label', 'Link materi');
+
+    const removeButton = document.createElement('button');
+    removeButton.type = 'button';
+    removeButton.textContent = 'Hapus';
+    removeButton.className = 'cancel-button';
+    removeButton.onclick = () => wrapper.remove();
+
+    wrapper.appendChild(input);
+    wrapper.appendChild(removeButton);
+    container.appendChild(wrapper);
+  }
+
+  let label = document.getElementById('material-link-label');
+  if (!label) {
+    label = document.createElement('label');
+    label.id = 'material-link-label';
+    label.textContent = 'Link materi';
+    label.style.fontWeight = '600';
+    label.style.color = 'var(--ink)';
+  }
+
+  let button = document.getElementById('material-link-add-button');
+  if (!button) {
+    button = document.createElement('button');
+    button.id = 'material-link-add-button';
+    button.type = 'button';
+    button.className = 'upload-button';
+    button.textContent = '+ Link lain';
+    button.style.padding = '6px 10px';
+    button.style.minHeight = 'auto';
+    button.onclick = addMaterialLinkField;
+  }
+
+  const header = document.getElementById('material-link-header');
+  if (!header) {
+    const headerRow = document.createElement('div');
+    headerRow.id = 'material-link-header';
+    headerRow.style.display = 'flex';
+    headerRow.style.alignItems = 'center';
+    headerRow.style.justifyContent = 'space-between';
+    headerRow.style.gap = '8px';
+    headerRow.style.marginTop = '8px';
+    headerRow.appendChild(label);
+    headerRow.appendChild(button);
+    editor.insertBefore(headerRow, container);
+  }
+}
+
+function addMaterialLinkField() {
+  const container = document.getElementById('material-links-container');
+  if (!container) return;
+
+  const wrapper = document.createElement('div');
+  wrapper.style.display = 'flex';
+  wrapper.style.alignItems = 'center';
+  wrapper.style.gap = '8px';
+  wrapper.style.marginTop = '8px';
+
+  const input = document.createElement('input');
+  input.type = 'url';
+  input.className = 'material-link-input';
+  input.placeholder = 'Link lain';
+  input.setAttribute('aria-label', 'Link lain materi');
+
+  const removeButton = document.createElement('button');
+  removeButton.type = 'button';
+  removeButton.textContent = 'Hapus';
+  removeButton.className = 'cancel-button';
+  removeButton.onclick = () => wrapper.remove();
+
+  wrapper.appendChild(input);
+  wrapper.appendChild(removeButton);
+  container.appendChild(wrapper);
+  input.focus();
+}
+
+function getMaterialLinkInputs() {
+  const container = document.getElementById('material-links-container');
+  if (!container) return [];
+
+  const values = [];
+  container.querySelectorAll('.material-link-input').forEach(input => {
+    const value = input.value.trim();
+    if (value) values.push(value);
+  });
+  return values;
+}
+
+function resetMaterialLinkInputs(links = []) {
+  const container = document.getElementById('material-links-container');
+  if (!container) return;
+
+  const values = Array.isArray(links) ? links : [links];
+  container.innerHTML = '';
+
+  if (!values.length || !values[0]) {
+    const input = document.createElement('input');
+    input.id = 'editor-link';
+    input.className = 'material-link-input';
+    input.type = 'url';
+    input.placeholder = 'Link file atau Google Drive';
+    input.setAttribute('aria-label', 'Link materi');
+    container.appendChild(input);
+    return;
+  }
+
+  values.forEach((link, index) => {
+    const wrapper = document.createElement('div');
+    wrapper.style.display = 'flex';
+    wrapper.style.alignItems = 'center';
+    wrapper.style.gap = '8px';
+    wrapper.style.marginTop = index === 0 ? '0' : '8px';
+
+    const input = document.createElement('input');
+    input.type = 'url';
+    input.className = 'material-link-input';
+    input.value = link;
+    input.placeholder = index === 0 ? 'Link file atau Google Drive' : 'Link lain';
+    input.setAttribute('aria-label', index === 0 ? 'Link materi' : 'Link lain materi');
+
+    const removeButton = document.createElement('button');
+    removeButton.type = 'button';
+    removeButton.textContent = 'Hapus';
+    removeButton.className = 'cancel-button';
+    removeButton.onclick = () => {
+      const row = removeButton.parentElement;
+      row.remove();
+    };
+
+    wrapper.appendChild(input);
+    wrapper.appendChild(removeButton);
+    container.appendChild(wrapper);
+  });
+}
+
 function openMaterialEditor(index = null) {
   editingMaterialIndex = index;
   const material = index === null ? {} : allMateri[index];
+  const linksValue = Array.isArray(material.link) ? material.link : (material.link ? [material.link] : []);
+  ensureMaterialLinkEditor();
   document.getElementById('editor-title').textContent = index === null ? 'Tambah materi' : 'Edit materi';
   document.getElementById('editor-judul').value = material.judul || '';
   document.getElementById('editor-deskripsi').value = material.deskripsi || '';
   document.getElementById('editor-mapel').value = material.mapel || 'KJR';
-  document.getElementById('editor-link').value = material.link || '';
+  resetMaterialLinkInputs(linksValue);
   document.getElementById('material-editor').classList.remove('hidden');
   document.getElementById('editor-judul').focus();
 }
 
 function closeMaterialEditor() {
   editingMaterialIndex = null;
+  resetMaterialLinkInputs([]);
   document.getElementById('material-editor').classList.add('hidden');
 }
 
 async function saveMaterial() {
   const judul = document.getElementById('editor-judul').value.trim();
   const deskripsi = document.getElementById('editor-deskripsi').value.trim();
-  const link = document.getElementById('editor-link').value.trim();
+  const links = normalizeMaterialLinks(getMaterialLinkInputs());
   const mapel = document.getElementById('editor-mapel').value;
   
   // Validate input
-  if (!validateMaterial(judul, deskripsi, link)) return;
+  if (!validateMaterial(judul, deskripsi, links)) return;
   
   // Set loading state
   const saveBtn = document.querySelector('.save-button');
   setButtonLoading(saveBtn, true);
   
   try {
-    const material = { mapel, judul, deskripsi, link, source: 'local', createdAt: new Date().toISOString() };
+    const material = { mapel, judul, deskripsi, link: links.length > 1 ? links : links[0], source: 'local', createdAt: new Date().toISOString() };
     const isEditing = editingMaterialIndex !== null;
     
     if (isEditing) {
