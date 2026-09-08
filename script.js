@@ -1,4 +1,4 @@
-const GOOGLE_SHEETS_URL = 'https://script.google.com/macros/s/AKfycbx0pmnFiYFnUtQUqLHgKLn2FN0j4Ke_wS5g5-uETSGZ_N0wz74cWB4F8O8B9YnDWEgE/exec'; // Isi dengan URL Web App Google Apps Script.
+const GOOGLE_SHEETS_URL = 'https://script.google.com/macros/s/AKfycbwIKGLMrcS_2MIuEEVzh-NI09NTOo6g6moR3bNCLZz8V4YktZRqPzIj1zUIPbGZH-W1/exec'; // Isi dengan URL Web App Google Apps Script.
 const ADMIN_USERNAME = 'admin';
 const ADMIN_PASSWORD = 'tjkt2025';
 const DEFAULT_QUIZ_DURATION = 15;
@@ -1036,7 +1036,7 @@ function toggleAdminLogin() {
 function setupBrandDisplay() {
   document.querySelectorAll('.brand').forEach(brand => {
     const textNode = Array.from(brand.childNodes).find(node => node.nodeType === Node.TEXT_NODE);
-    if (textNode) textNode.nodeValue = ' RuangKelas/XII TJKTT';
+    if (textNode) textNode.nodeValue = ' RuangKelas/XI TJKT';
   });
 }
 
