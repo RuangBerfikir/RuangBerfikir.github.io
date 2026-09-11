@@ -1285,7 +1285,7 @@ function toggleAdminLogin() {
 function setupBrandDisplay() {
   document.querySelectorAll('.brand').forEach(brand => {
     const textNode = Array.from(brand.childNodes).find(node => node.nodeType === Node.TEXT_NODE);
-    if (textNode) textNode.nodeValue = ' RuangKelas/XII TJKTT';
+    if (textNode) textNode.nodeValue = ' RuangKelas/XII TJKT';
   });
 }
 
